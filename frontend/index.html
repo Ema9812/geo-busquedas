@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Buscador de comercios cercanos</title>
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+
+    #buscador {
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      z-index: 10;
+      background: white;
+      padding: 15px;
+      border-radius: 12px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+      width: 340px;
+    }
+
+    #buscador h2 {
+      margin: 0 0 10px 0;
+      font-size: 16px;
+      color: #333;
+    }
+
+    #buscador input {
+      width: 100%;
+      padding: 10px;
+      font-size: 14px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      margin-bottom: 10px;
+    }
+
+    #buscador button {
+      width: 100%;
+      padding: 10px;
+      background: #4264fb;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    #buscador button:hover {
+      background: #3553d8;
+    }
+
+    #resultados {
+      margin-top: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-size: 13px;
+    }
+
+    .comercio-item {
+      padding: 8px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .comercio-item:last-child {
+      border-bottom: none;
+    }
+
+    .comercio-item strong {
+      color: #4264fb;
+    }
+
+    .comercio-item small {
+      color: #666;
+    }
+
+    #map {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div id="buscador">
+    <h2>🔍 Buscar comercios cercanos</h2>
+    <input id="lugar" placeholder="Ej: Monumento a la Bandera" />
+    <button onclick="buscar()">Buscar</button>
+    <div id="resultados"></div>
+  </div>
+  <div id="map"></div>
+
+  <script>
+    // ==================== CONFIG ====================
+    const MAPBOX_TOKEN = 'pk.eyJ1IjoiZW1hbnVlbDU3MCIsImEiOiJjbXV4OW9kZnUwM2FtMnhweHA5MWtqb2s3In0.3KJuQz2bL5mVv8jT0nsc2Q';
+    const API_URL = 'http://localhost:3000';
+    const RADIO_METROS = 2000; // 2 km
+
+    // ==================== MAPA ====================
+    mapboxgl.accessToken = MAPBOX_TOKEN;
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: [-60.6300, -32.9476], // Rosario
+      zoom: 13
+    });
+
+    let marcadores = [];
+
+    // ==================== BÚSQUEDA ====================
+    async function buscar() {
+      const query = document.getElementById('lugar').value.trim();
+      if (!query) return alert('Escribí un lugar');
+
+      const resultadosDiv = document.getElementById('resultados');
+      resultadosDiv.innerHTML = '⏳ Buscando lugar...';
+
+      try {
+        // 1) Geocoding con Mapbox
+        const geoRes = await fetch(
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${MAPBOX_TOKEN}&limit=1&country=ar`
+        );
+        const geoData = await geoRes.json();
+
+        if (!geoData.features || geoData.features.length === 0) {
+          resultadosDiv.innerHTML = '❌ Lugar no encontrado';
+          return;
+        }
+
+        const [lng, lat] = geoData.features[0].center;
+        const nombreLugar = geoData.features[0].place_name;
+
+        // Centrar mapa y marcar el lugar buscado
+        map.flyTo({ center: [lng, lat], zoom: 14 });
+
+        // Limpiar marcadores previos
+        marcadores.forEach(m => m.remove());
+        marcadores = [];
+
+        // Marcador rojo del lugar buscado
+        const marcadorLugar = new mapboxgl.Marker({ color: 'red' })
+          .setLngLat([lng, lat])
+          .setPopup(new mapboxgl.Popup().setHTML(`<b>📍 ${nombreLugar}</b>`))
+          .addTo(map);
+        marcadores.push(marcadorLugar);
+
+        resultadosDiv.innerHTML = `⏳ Buscando comercios cerca de:<br><small>${nombreLugar}</small>...`;
+
+        // 2) Buscar comercios cercanos en nuestra API
+        const apiRes = await fetch(
+          `${API_URL}/comercios-cerca-de?lat=${lat}&lng=${lng}&radio=${RADIO_METROS}`
+        );
+        const comercios = await apiRes.json();
+
+        // 3) Mostrar resultados
+        if (comercios.length === 0) {
+          resultadosDiv.innerHTML = '😕 No hay comercios en un radio de 2 km';
+          return;
+        }
+
+        resultadosDiv.innerHTML = `<strong>✅ ${comercios.length} comercio(s) encontrado(s):</strong>`;
+
+        comercios.forEach(c => {
+          // Agregar al listado
+          const div = document.createElement('div');
+          div.className = 'comercio-item';
+          div.innerHTML = `
+            <strong>${c.nombre}</strong><br>
+            <small>${c.categoria || ''} · ${c.direccion || ''}</small>
+          `;
+          resultadosDiv.appendChild(div);
+
+          // Agregar marcador azul
+          const marker = new mapboxgl.Marker({ color: '#4264fb' })
+            .setLngLat([c.lng, c.lat])
+            .setPopup(new mapboxgl.Popup().setHTML(
+              `<b>${c.nombre}</b><br><small>${c.direccion || ''}</small>`
+            ))
+            .addTo(map);
+          marcadores.push(marker);
+        });
+
+      } catch (err) {
+        console.error(err);
+        resultadosDiv.innerHTML = `❌ Error: ${err.message}`;
+      }
+    }
+
+    // Permitir Enter en el input
+    document.getElementById('lugar').addEventListener('keypress', e => {
+      if (e.key === 'Enter') buscar();
+    });
+  </script>
+</body>
+</html>
